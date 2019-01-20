@@ -1,7 +1,8 @@
 use core::slice;
 
 pub struct Bytes<'a> {
-    slice: &'a [u8],
+    original: &'a [u8],
+    head: usize,
     pos: usize
 }
 
@@ -9,37 +10,39 @@ impl<'a> Bytes<'a> {
     #[inline]
     pub fn new(slice: &'a [u8]) -> Bytes<'a> {
         Bytes {
-            slice: slice,
+            original: slice,
+            head: 0,
             pos: 0
         }
     }
 
     #[inline]
-    pub fn pos(&self) -> usize {
-        self.pos
+    pub fn pending(&self) -> usize {
+        debug_assert!(self.pos >= self.head);
+        self.pos - self.head
     }
 
     #[inline]
     pub fn peek(&self) -> Option<u8> {
-        self.slice.get(self.pos).cloned()
+        self.original.get(self.pos).cloned()
     }
 
     #[inline]
     pub unsafe fn bump(&mut self) {
-        debug_assert!(self.pos + 1 <= self.slice.len(), "overflow");
+        debug_assert!(self.pos + 1 <= self.original.len(), "overflow");
         self.pos += 1;
     }
 
     #[allow(unused)]
     #[inline]
     pub unsafe fn advance(&mut self, n: usize) {
-        debug_assert!(self.pos + n <= self.slice.len(), "overflow");
+        debug_assert!(self.pos + n <= self.original.len(), "overflow");
         self.pos += n;
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
-        self.slice.len()
+    pub fn used(&self) -> usize {
+        self.pos
     }
 
     #[inline]
@@ -52,19 +55,20 @@ impl<'a> Bytes<'a> {
 
     #[inline]
     pub unsafe fn slice_skip(&mut self, skip: usize) -> &'a [u8] {
-        debug_assert!(self.pos >= skip);
-        let head_pos = self.pos - skip;
-        let ptr = self.slice.as_ptr();
-        let head = slice::from_raw_parts(ptr, head_pos);
-        let tail = slice::from_raw_parts(ptr.offset(self.pos as isize), self.slice.len() - self.pos);
-        self.pos = 0;
-        self.slice = tail;
-        head
+        debug_assert!(self.pos >= self.head);
+        debug_assert!((self.pos - self.head) >= skip);
+
+        let span_start = self.head;
+        let span_end = self.pos - skip;
+        self.head = self.pos;
+
+        let span_start_ptr = self.original.as_ptr().add(span_start);
+        slice::from_raw_parts(span_start_ptr, span_end - span_start)
     }
 
     #[inline]
     pub fn next_8<'b>(&'b mut self) -> Option<Bytes8<'b, 'a>> {
-        if self.slice.len() > self.pos + 8 {
+        if self.original.len() > self.pos + 8 {
             Some(Bytes8::new(self))
         } else {
             None
@@ -75,7 +79,7 @@ impl<'a> Bytes<'a> {
 impl<'a> AsRef<[u8]> for Bytes<'a> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        &self.slice[self.pos..]
+        &self.original[self.pos..]
     }
 }
 
@@ -84,8 +88,8 @@ impl<'a> Iterator for Bytes<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<u8> {
-        if self.slice.len() > self.pos {
-            let b = unsafe { *self.slice.get_unchecked(self.pos) };
+        if self.original.len() > self.pos {
+            let b = unsafe { *self.original.get_unchecked(self.pos) };
             self.pos += 1;
             Some(b)
         } else {
@@ -105,7 +109,7 @@ macro_rules! bytes8_methods {
         #[inline]
         pub fn $f(&mut self) -> u8 {
             self.assert_pos($pos);
-            let b = unsafe { *self.bytes.slice.get_unchecked(self.bytes.pos) };
+            let b = unsafe { *self.bytes.original.get_unchecked(self.bytes.pos) };
             self.bytes.pos += 1;
             b
         }

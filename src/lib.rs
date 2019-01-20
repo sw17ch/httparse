@@ -298,7 +298,6 @@ impl<'h, 'b> Request<'h, 'b> {
 
     /// Try to parse a buffer of bytes into the Request.
     pub fn parse(&mut self, buf: &'b [u8]) -> Result<usize> {
-        let orig_len = buf.len();
         let mut bytes = Bytes::new(buf);
         complete!(skip_empty_lines(&mut bytes));
         self.method = Some(complete!(parse_token(&mut bytes)));
@@ -306,7 +305,7 @@ impl<'h, 'b> Request<'h, 'b> {
         self.version = Some(complete!(parse_version(&mut bytes)));
         newline!(bytes);
 
-        let len = orig_len - bytes.len();
+        let len = bytes.used();
         let headers_len = complete!(parse_headers_iter(&mut self.headers, &mut bytes));
 
         Ok(Status::Complete(len + headers_len))
@@ -365,7 +364,6 @@ impl<'h, 'b> Response<'h, 'b> {
 
     /// Try to parse a buffer of bytes into this `Response`.
     pub fn parse(&mut self, buf: &'b [u8]) -> Result<usize> {
-        let orig_len = buf.len();
         let mut bytes = Bytes::new(buf);
 
         complete!(skip_empty_lines(&mut bytes));
@@ -397,7 +395,7 @@ impl<'h, 'b> Response<'h, 'b> {
         }
 
 
-        let len = orig_len - bytes.len();
+        let len = bytes.used();
         let headers_len = complete!(parse_headers_iter(&mut self.headers, &mut bytes));
         Ok(Status::Complete(len + headers_len))
     }
@@ -583,10 +581,10 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
             let b = next!(bytes);
             if b == b'\r' {
                 expect!(bytes.next() == b'\n' => Err(Error::NewLine));
-                result = Ok(Status::Complete(count + bytes.pos()));
+                result = Ok(Status::Complete(count + bytes.pending()));
                 break;
             } else if b == b'\n' {
-                result = Ok(Status::Complete(count + bytes.pos()));
+                result = Ok(Status::Complete(count + bytes.pending()));
                 break;
             } else if !is_header_name_token(b) {
                 return Err(Error::HeaderName);
@@ -602,7 +600,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
             'name: loop {
                 let b = next!(bytes);
                 if b == b':' {
-                    count += bytes.pos();
+                    count += bytes.pending();
                     header.name = unsafe {
                         str::from_utf8_unchecked(bytes.slice_skip(1))
                     };
@@ -620,7 +618,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                 'whitespace: loop {
                     b = next!(bytes);
                     if b == b' ' || b == b'\t' {
-                        count += bytes.pos();
+                        count += bytes.pending();
                         bytes.slice();
                         continue 'whitespace;
                     } else {
@@ -667,13 +665,13 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
             //found_ctl
             let value_slice : &[u8] = if b == b'\r' {
                 expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
-                count += bytes.pos();
+                count += bytes.pending();
                 // having just check that `\r\n` exists, it's safe to skip those 2 bytes
                 unsafe {
                     bytes.slice_skip(2)
                 }
             } else if b == b'\n' {
-                count += bytes.pos();
+                count += bytes.pending();
                 // having just check that `\r\n` exists, it's safe to skip 1 byte
                 unsafe {
                     bytes.slice_skip(1)
@@ -771,7 +769,7 @@ pub fn parse_chunk_size(buf: &[u8])
             _ => return Err(InvalidChunkSize),
         }
     }
-    Ok(Status::Complete((bytes.pos(), size)))
+    Ok(Status::Complete((bytes.pending(), size)))
 }
 
 #[cfg(test)]
